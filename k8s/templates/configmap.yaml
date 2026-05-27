@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cyberStreamCore-shared-config
+  labels:
+    app.kubernetes.io/managed-by: Helm
+data:
+  NODE_ENV: "production"
+	DATABASE_URL=postgres://postgres:123456@cyber_stream-db:5432/cyber-stream_db
+  REDIS_URL: "redis://redis-service:6379"
+  RABBITMQ_URL: "amqp://guest:guest@rabbitmq-service:5672"
