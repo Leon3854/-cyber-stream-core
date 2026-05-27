@@ -1,0 +1,47 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// 1. Сущность Матча (Live / Finished)
+model Match {
+  id              String   @id @default(uuid())
+  game            String   @default("dota2") // "dota2" или "cs2"
+  teamA           String   @map("team_a") // Например: "Team Spirit"
+  teamB           String   @map("team_b") // Например: "BetBoom Team"
+  status          String   @default("LIVE") // "UPCOMING", "LIVE", "FINISHED"
+  region          String   @default("EU")
+  timezone        String   @default("Europe/Moscow")
+  aiDraftAnalysis String?  @map("ai_draft_analysis") // Текстовый вердикт Claude AI SDK!
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  events GameEvent[] // Плотная связь 1-ко-многим с тиками матча
+
+  @@map("matches")
+}
+
+// 2. Поток Live-Событий из WebSocket фида Steam / Букмекеров
+model GameEvent {
+  id        String   @id @default(uuid())
+  matchId   String   @map("match_id")
+  eventId   String   @unique @map("event_id") // UUID события от источника (для Redis SET NX идемпотентности)
+  eventType String   @map("event_type") // "kill", "tower_deny", "roshan_slain", "odds_change"
+  payload   Json // Сырые обфусцированные данные события (золото, координаты на карте, киллфид)
+  timestamp DateTime @default(now())
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  // ИНДЕКСЫ ДЛЯ HIGHLOAD (Для быстрой аналитики графиков)
+  @@index([matchId, timestamp])
+  @@map("game_events")
+}
