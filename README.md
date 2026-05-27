@@ -1,1 +1,2 @@
-# -cyber-stream-core
+# Сyber Stream Core
+**ТЗ прописано в файле **
