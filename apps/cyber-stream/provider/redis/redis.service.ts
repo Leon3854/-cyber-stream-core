@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import {Redis} from "ioredis";
+import Redis from "ioredis";
 
 @Injectable()
 
@@ -9,32 +9,23 @@ import {Redis} from "ioredis";
 export class RedisService implements OnModuleInit, OnModuleDestroy {
 
 	private readonly logger = new Logger(RedisService.name)
-	private client: Redis
+	private redisClient: Redis
 
 	/**
 	 * @description - Хук жизненного цикла. Гарантирует, что Redis будет готов ДО того, 
 	 * как в Service прилетит первый запрос.
 	*/
 	async onModuleInit() {
-		const redisUrl = process.env.REDIS_URL;
+		const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+		this.redisClient = new Redis(redisUrl);
 
-		let redisConfig: any;
+		this.redisClient.on('connect', () => {
+      this.logger.log('🚀 Redis client successfully connected to highload cache layer');
+    });
 
-		if (redisUrl && redisUrl.startsWith('redis://')) {
-			redisConfig = {
-        path: redisUrl
-      };
-		} else {
-			redisConfig = {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: Number(process.env.REDIS_PORT) || 6379,
-      };
-		}
-
-		this.client.on('error', (err) => this.logger.error('Redis Error', err));
-    this.client.on('connect', () =>
-      this.logger.log('✅ Redis Connected (Highload Optimized)'),
-    );
+    this.redisClient.on('error', (err) => {
+      this.logger.error('❌ Redis connection critical error:', err);
+    });
 	}
 
 
@@ -49,7 +40,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 	 */
 	async getIdempotencyResult<T=any>(key: string):Promise<T | null> {
 		try {
-			const data = await this.client.get(`stream:${key}`);
+			const data = await this.redisClient.get(`stream:${key}`);
 			if(!data) {
 				return null;
 			}
@@ -65,41 +56,41 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
 
 	/**
-	 * 
-	 * @param key - получаем ключ 
-	 * @param ttl - временной лаг
-	 * @returns - возвращаем булеан значение либо правда либо ложь
-	 * @description - записываем уникальный ключ со сроком "свежости" на 24 часа в EX-секунадах
-	 * если NX есть то выдаем null и не записыаем
-	 */
-	async setIdempotencyKey(key: string, ttl: number=86400):Promise<boolean> {
-		const result = await this.client.set(`stream:${key}`, 'loked', 'EX', ttl, 'NX');
+   * @description Атомарный распределенный замок с TTL для укрощения дубликатов пакетов Steam/Букмекеров
+   * @param messageId - Уникальный UUID игрового события (kill, tower, odds)
+   * @returns Promise<boolean> - true (пакет новый, пропускаем), false (дубликат, жесткий блок)
+   */
+  async setIdempotencyKey(messageId: string): Promise<boolean> {
+    const key = `message:${messageId}`;
+    
+    // ФИЗИКА ПРОЦЕССА: 
+    // 'NX' — запишет ключ только если его ЕЩЕ НЕТ в базе (атомарная проверка)
+    // 'EX', 15 — автоматически сотрет ключ через 15 секунд, защищая память от OOM (Out of Memory)
+    const result = await this.redisClient.set(key, 'locked', 'EX', 15, 'NX');
+    
+    // Если результат 'OK' -> замок успешно занят, это первый уникальный запрос
+    return result === 'OK';
+  }
 
-		if(result ==='OK') {
-			this.logger.log(`Key [${key}] stored. Success.`);
-      return true;
-		}
-		// Если попали сюда — значит, это дубликат!
-		this.logger.warn(`Duplicate detected! Key [${key}] already exists.`);
-		return false;
-	}
 
 	/**
 	 * @param - key ключ
 	 * @description - Удаление уникального ключа. Можно будет исопльзовать для Saga
 	 * при срыве операции на старте
 	 */
-	async deleteIdempotencyKey(key: string): Promise<void> {
-		await this.client.del(`product:${key}`);
-		this.logger.log(`Key [${key}] removed (rollback/cleanup).`);
-	}
+	async deleteIdempotencyKey(messageId: string): Promise<void> {
+    const key = `message:${messageId}`;
+    await this.redisClient.del(key);
+    this.logger.warn(`Idempotency rollback executed for key: ${key}`);
+  }
 
 	/**
 	 * @description - Мягкое завершение работы
 	*/
-	async onModuleDestroy() {
-		if(this.client) {
-			await this.client.quit()
-		}
-	}
+	onModuleDestroy() {
+    if (this.redisClient) {
+      this.redisClient.disconnect();
+      this.logger.log('Redis client disconnected gracefully');
+    }
+  }
 }
